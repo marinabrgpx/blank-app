@@ -1,2 +1,7 @@
 streamlit
 openpyxl
+ortools
+bs4
+webbrowser
+pyvis
+importlib

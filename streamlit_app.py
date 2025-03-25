@@ -2,6 +2,6 @@ import streamlit as st
 import functions as f
 import pandas as pd
 
-uploaded_file = st.sidebar.file_uploader("Load Data", type = ["xlsx"])
-df = pd.read_excel(uploaded_file, sheet_name="actual_model")
-st.dataframe(df, use_container_width=True)
+add_uploader = st.sidebar.file_uploader("Load Data", type = ["xlsx"])
+main = pd.read_excel(add_uploader, sheet_name="actual_model")
+st.sidebar.button('View main', on_click=lambda: f.show_main(main), type='tertiary')
