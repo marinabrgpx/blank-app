@@ -23,7 +23,9 @@ def algoritmo(tasks, areas, valid_types, worker_types, H, task_turnos, ids, task
         M = []
         for k in range(K):
             carga_k = sum(area_tasks[j] for j in range(n) if k in area_valid_types[j])
-            M.append(max(1, math.ceil(carga_k / H)))
+            num_turnos = len(set([t for idx, t in enumerate(area_task_turnos) if k in area_valid_types[idx]]))
+            M.append(max(3, math.ceil(carga_k / H), num_turnos))  # al menos 3 por si hay 3 turnos
+
 
         w, x, z = [], [], []
 
@@ -78,41 +80,42 @@ def algoritmo(tasks, areas, valid_types, worker_types, H, task_turnos, ids, task
                         sum_x.append(x[k][i][j])
                 solver.Add(solver.Sum(sum_x) <= H * w[k][i])
 
-        # Restricción: trabajador solo puede estar en un único turno
-        for k in range(K):
-            for i in range(M[k]):
-                turnos_presentes = {}
-                for j in range(n):
-                    if x[k][i][j] is not None:
-                        turno = area_task_turnos[j] or "Flexible"
-                        if turno not in turnos_presentes:
-                            turnos_presentes[turno] = []
-                        turnos_presentes[turno].append(z[k][i][j])
-                if len(turnos_presentes) > 1:
-                    turno_flags = []
-                    for turno, z_list in turnos_presentes.items():
-                        turno_flag = solver.IntVar(0, 1, f'turno_flag_{k}_{i}_{turno}')
-                        solver.Add(solver.Sum(z_list) >= 0.001 * turno_flag)
-                        turno_flags.append(turno_flag)
-                    solver.Add(solver.Sum(turno_flags) <= 1)
+        # ✅ Restricción: un trabajador solo puede estar en un único turno (Mañana, Tarde, Noche, Flexible)
+        TURNOS_VALIDOS = ["Mañana", "Tarde", "Noche", "Flexible"]
 
-        # Restricción: un trabajador no puede hacer la misma tarea base en varios turnos
+        # Estandariza los turnos (evita None)
+        area_task_turnos = [
+            turno if turno is not None else "Flexible"
+            for turno in area_task_turnos
+        ]
+
+        # Crear variables de turno activo por trabajador
+        turno_vars = {}  # clave: (k, i, turno) → variable binaria
+
         for k in range(K):
             for i in range(M[k]):
-                tareas_base_presentes = {}
+                turno_flags = []
+                for turno in TURNOS_VALIDOS:
+                    var = solver.IntVar(0, 1, f"turno_activo_{k}_{i}_{turno}")
+                    turno_vars[(k, i, turno)] = var
+                    turno_flags.append(var)
+
+                # ✅ Solo puede tener un turno activo
+                solver.Add(solver.Sum(turno_flags) <= 1)
+
+        # Forzar que las tareas asignadas coincidan con el turno activo del trabajador
+        for k in range(K):
+            for i in range(M[k]):
                 for j in range(n):
                     if x[k][i][j] is not None:
-                        tarea_base = ids[indices[j]].split("-")[0]
-                        if tarea_base not in tareas_base_presentes:
-                            tareas_base_presentes[tarea_base] = []
-                        tareas_base_presentes[tarea_base].append(z[k][i][j])
-                for z_list in tareas_base_presentes.values():
-                    if len(z_list) > 1:
-                        solver.Add(solver.Sum(z_list) <= 1)
+                        turno_j = area_task_turnos[j]
+                        turno_var = turno_vars[(k, i, turno_j)]
+                        solver.Add(z[k][i][j] <= turno_var)
+
 
         # SOFT SECUENCIAS POR TURNO
         penalizaciones_slacks = []
-        for turno_actual in ["Mañana", "Tarde", "Noche", None]:
+        for turno_actual in ["Mañana", "Tarde", "Noche", "Flexible"]:
             ids_turno = [ids[indices[j]] for j in range(n) if task_turnos[indices[j]] == turno_actual]
 
             for idx_seq, seq in enumerate(task_sequences.get(area, [])):

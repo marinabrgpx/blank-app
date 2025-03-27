@@ -2,13 +2,8 @@ import streamlit as st
 import functions as f
 import pandas as pd
 from algoritmo_asignacion import algoritmo
-import streamlit.components.v1 as components
-from pyvis.network import Network
-import tempfile
-import os
-import json
-import random
-import colorsys
+import plotly.express as px
+
 
 # 🔹 Inicializar estado global
 if "modelos" not in st.session_state:
@@ -83,6 +78,7 @@ def renombrar_modelo(nombre_actual, nuevo_nombre):
 
 
 # 🔹 Sidebar: carga de archivo y navegación
+st.sidebar.markdown("### Cargar archivo principal")
 add_uploader = st.sidebar.file_uploader("Cargar archivo", type=["xlsx"])
 
 matriz_similitud = {
@@ -126,13 +122,14 @@ if nuevo_modelo_uploader is not None:
         else:
             st.error("❌ El archivo no tiene la estructura esperada. Revisa las columnas.")
 
+st.sidebar.markdown("---")
+st.sidebar.button("Ver grafo", on_click=mostrar_grafo, type='tertiary')
+st.sidebar.button("Ver tabla principal", on_click=mostrar_tabla_principal, type='tertiary')
+st.sidebar.button("Ver tabla del modelo actual", on_click=mostrar_tabla_modelo, type='tertiary')
+st.sidebar.button("💰 Estimar ahorro global", on_click=lambda: mostrar_ahorro_global(), type='tertiary')
+st.sidebar.button("Comparar modelos", on_click=mostrar_comparacion, type='tertiary')
+st.sidebar.button("⚙️ Ajustar modelos", on_click=mostrar_ajustes, type='tertiary')
 
-st.sidebar.button("Ver grafo", on_click=mostrar_grafo)
-st.sidebar.button("Ver tabla principal", on_click=mostrar_tabla_principal)
-st.sidebar.button("Ver tabla del modelo actual", on_click=mostrar_tabla_modelo)
-st.sidebar.button("Comparar modelos", on_click=mostrar_comparacion)
-st.sidebar.button("⚙️ Ajustar modelos", on_click=mostrar_ajustes)
-st.sidebar.button("💰 Estimar ahorro global", on_click=lambda: mostrar_ahorro_global())
 
 
 
@@ -156,8 +153,8 @@ if add_uploader is not None:
             "areas_posibles": posibles_areas
         }
 
-    # Selector de modelo
-    st.session_state.modelo_seleccionado = st.selectbox(
+    if not st.session_state.mostrar_ahorro_global:
+        st.session_state.modelo_seleccionado = st.selectbox(
         "Seleccionar modelo a visualizar",
         list(st.session_state.modelos.keys()),
         index=list(st.session_state.modelos.keys()).index(st.session_state.modelo_seleccionado)
@@ -213,12 +210,78 @@ if add_uploader is not None:
             st.dataframe(df_original_filtrado, use_container_width=True)
 
     if st.session_state.mostrar_grafo:
-        f.plot_assignment_graph_streamlit(resultado_modelo)
+        st.markdown("### 🔍 Explorar el grafo por nodo")
+
+        # Obtener lista de nodos desde el resultado del modelo
+        resultado = resultado_modelo
+
+        nodos_tareas = set()
+        nodos_empleados = set()
+
+        for area, empleados in resultado.items():
+            for emp in empleados:
+                nodos_empleados.add(f"{area}__{emp}")
+                for tarea, _ in empleados[emp]:
+                    nodos_tareas.add(f"{area}__{tarea}")
+
+        todos_nodos = sorted(list(nodos_empleados)) + sorted(list(nodos_tareas))
+
+        nodo_seleccionado = st.selectbox(
+            "Selecciona un empleado o tarea para explorar:",
+            options=["(Mostrar todo)"] + todos_nodos,
+            key="nodo_grafo"
+        )
+
+        # Determinar si hay filtro activo
+        if nodo_seleccionado == "(Mostrar todo)":
+            nodo_seleccionado = None
+
+        f.plot_assignment_graph_streamlit(resultado_modelo, nodo_destacado=nodo_seleccionado)
+
 
         # Mostrar tabla resumen debajo del grafo
         st.markdown("### 📊 Resumen por tipo de empleado y área")
         tabla_resumen = f.generar_tabla_resumen(resultado_modelo)
         st.dataframe(tabla_resumen, use_container_width=True)
+
+        st.markdown("### 🧑‍🔬 Inspección de empleados")
+
+        empleados_disponibles = []
+        for area, asignaciones in resultado_modelo.items():
+            for empleado in asignaciones.keys():
+                empleados_disponibles.append(f"{area}__{empleado}")
+
+        empleado_seleccionado = st.selectbox(
+            "Selecciona un empleado para inspeccionar",
+            options=empleados_disponibles,
+            key="inspeccion_empleado"
+        )
+
+        if empleado_seleccionado:
+            area, empleado = empleado_seleccionado.split("__")
+            asignaciones = resultado_modelo[area][empleado]
+
+            df_empleado = pd.DataFrame(asignaciones, columns=["Tarea", "Horas asignadas"])
+            df_empleado["Área"] = area
+
+            # Buscar el turno si está en el nombre (ej. "Tarea - Mañana")
+            df_empleado["Turno"] = df_empleado["Tarea"].apply(
+                lambda x: x.split(" - ")[-1] if " - " in x else "Flexible"
+            )
+
+            total_horas = df_empleado["Horas asignadas"].sum()
+            subutilizado = total_horas < 8
+
+            st.markdown(f"#### 📋 Detalle de tareas para **{empleado}** en área **{area}**")
+            st.dataframe(df_empleado, use_container_width=True)
+
+            st.markdown(f"**⏱️ Total horas asignadas:** `{total_horas:.2f}h`")
+            if subutilizado:
+                st.warning("⚠️ Este empleado está subutilizado (< 8h)")
+            else:
+                st.success("✅ Este empleado tiene carga completa")
+
+
 
     # 🔹 Vista de comparación de modelos
     if st.session_state.mostrar_comparacion:
@@ -320,66 +383,174 @@ if add_uploader is not None:
         st.header("💰 Estimación de ahorro global")
 
         # Cargar archivo de costos desde archivo local
-        ruta_costos = "costes_empleados_completos.xlsx"
+        st.markdown("### 📁 Subir archivo de costos (por área, puesto, planta, etc.)")
 
-        try:
-            df_costos = pd.read_excel(ruta_costos)
-            st.success("✅ Archivo de costos cargado correctamente")
+        archivo_costos = st.file_uploader("Seleccionar archivo Excel", type=["xlsx"], key="costos_upload")
 
-            if "Nivel GPX" not in df_costos.columns or "Coste empresa anual (MXN)" not in df_costos.columns:
-                st.warning("⚠️ La tabla debe tener las columnas 'Nivel GPX' y 'Coste empresa anual (MXN)'")
+        if archivo_costos is not None:
+            excel_obj_costos = pd.ExcelFile(archivo_costos)
+            hoja_costos = st.selectbox("Seleccionar hoja de costos", excel_obj_costos.sheet_names, key="hoja_costos")
+
+            if hoja_costos:
+                df_costos = excel_obj_costos.parse(hoja_costos)
+                st.success("✅ Archivo de costos cargado correctamente")
+            
+            columnas_necesarias = [
+            "Area", "Planta/CEVE", "Tamaño", "Puesto", "Cantidad empleados", "Coste empresa anual"
+            ]
+            if not all(col in df_costos.columns for col in columnas_necesarias):
+                st.error("❌ El archivo debe tener las siguientes columnas:\n" + ", ".join(columnas_necesarias))
             else:
-                st.markdown("### 🔍 Seleccionar modelos para comparar con el original")
+                st.markdown("### 👀 Vista previa del archivo de costos")
+                st.dataframe(df_costos.head(), use_container_width=True)
 
-                modelos_disponibles = [m for m in st.session_state.modelos.keys() if m != "original"]
-                modelos_seleccionados = st.multiselect("Selecciona modelos a comparar", modelos_disponibles)
+            st.markdown("### 📉 Seleccionar modelos para estimar reducción")
 
-                if modelos_seleccionados:
-                    st.markdown("### 📉 Reducción de empleados por área y tipo (vs. modelo original)")
+            modelos_disponibles = [m for m in st.session_state.modelos.keys() if m != "original"]
+            modelos_seleccionados = st.multiselect("Selecciona modelos a comparar", modelos_disponibles)
 
-                    # 1. Totales originales por área y tipo
-                    original_resultado = st.session_state.modelos["original"]["resultado"]
-                    resumen_original = f.generar_tabla_resumen(original_resultado)
-                    resumen_original["Modelo"] = "original"
+            if modelos_seleccionados:
+                original_resultado = st.session_state.modelos["original"]["resultado"]
+                resumen_original = f.generar_tabla_resumen(original_resultado)
+                resumen_original["Modelo"] = "original"
 
-                    resumen_reduccion = []
+                resumen_reduccion = []
 
-                    # Convertimos el resumen original a un diccionario indexado por (Área, Tipo)
-                    original_dict = resumen_original.set_index(["Área", "Tipo de empleado"])["Nº empleados"].to_dict()
+                # Convertimos el resumen original a un diccionario por (Área, Tipo)
+                original_dict = resumen_original.set_index(["Área", "Tipo de empleado"])["Nº empleados"].to_dict()
 
-                    for modelo in modelos_seleccionados:
-                        resultado_modelo = st.session_state.modelos[modelo]["resultado"]
-                        df_modelo = f.generar_tabla_resumen(resultado_modelo)
-                        df_modelo["Modelo"] = modelo
+                for modelo in modelos_seleccionados:
+                    resultado_modelo = st.session_state.modelos[modelo]["resultado"]
+                    resumen_modelo = f.generar_tabla_resumen(resultado_modelo)
+                    resumen_modelo["Modelo"] = modelo
 
-                        modelo_dict = df_modelo.set_index(["Área", "Tipo de empleado"])["Nº empleados"].to_dict()
+                    modelo_dict = resumen_modelo.set_index(["Área", "Tipo de empleado"])["Nº empleados"].to_dict()
 
-                        # Comparar cada combinación presente en el original
-                        for (area, tipo), empleados_orig in original_dict.items():
-                            empleados_mod = modelo_dict.get((area, tipo), 0)
+                    # Comparar todos los pares posibles que existían en el original
+                    for (area, tipo), orig_val in original_dict.items():
+                        mod_val = modelo_dict.get((area, tipo), 0)
 
-                            if empleados_orig > 0:
-                                reduccion_pct = (empleados_orig - empleados_mod) / empleados_orig
-                            else:
-                                reduccion_pct = 0.0
+                        if orig_val > 0:
+                            reduccion = (orig_val - mod_val) / orig_val
+                        else:
+                            reduccion = 0.0
 
-                            resumen_reduccion.append({
-                                "Modelo": modelo,
-                                "Área": area,
-                                "Tipo de empleado": tipo,
-                                "Original": empleados_orig,
-                                "Modelo actual": empleados_mod,
-                                "% Reducción estimada": round(reduccion_pct * 100, 2)
-                            })
+                        resumen_reduccion.append({
+                            "Modelo": modelo,
+                            "Área": area,
+                            "Tipo de empleado": tipo,
+                            "Original": orig_val,
+                            "Modelo actual": mod_val,
+                            "% Reducción estimada": round(reduccion * 100, 2)
+                        })
 
-                    df_reduccion = pd.DataFrame(resumen_reduccion)
-                    st.dataframe(df_reduccion, use_container_width=True)
+                df_reduccion_por_area_tipo = pd.DataFrame(resumen_reduccion)
+                st.markdown("### 📊 Reducción estimada por área y tipo de empleado (Puesto)")
+                st.dataframe(df_reduccion_por_area_tipo, use_container_width=True)
+
+                st.markdown("### 💸 Estimación de ahorro económico por área y tipo")
+
+                # Convertimos la reducción estimada a diccionario
+                reduccion_dict = df_reduccion_por_area_tipo.set_index(["Área", "Tipo de empleado"])["% Reducción estimada"].to_dict()
+
+                ahorro_filas = []
+
+                for _, row in df_costos.iterrows():
+                    area = row["Area"]
+                    tipo = row["Puesto"]
+                    cantidad = row["Cantidad empleados"]
+                    coste_total = row["Coste empresa anual"]
+
+                    clave = (area, tipo)
+                    pct_reduccion = reduccion_dict.get(clave, 0) / 100  # si no hay reducción, se asume 0
+
+                    costo_estimado = coste_total * (1 - pct_reduccion)
+                    ahorro = coste_total - costo_estimado
+
+                    ahorro_filas.append({
+                        "Area": area,
+                        "Tipo de empleado": tipo,
+                        "Empleados actuales": cantidad,
+                        "Costo actual": round(coste_total, 2),
+                        "% Reducción aplicada": round(pct_reduccion * 100, 2),
+                        "Costo estimado": round(costo_estimado, 2),
+                        "Ahorro estimado": round(ahorro, 2)
+                    })
+
+                df_ahorro = pd.DataFrame(ahorro_filas)
+                st.dataframe(df_ahorro, use_container_width=True)
+
+                ahorro_total = df_ahorro["Ahorro estimado"].sum()
+                st.markdown(f"### 🧾 Ahorro total estimado: **${ahorro_total:,.2f}**")
+
+                st.markdown("### 🗂️ Comparar costos actuales vs modelo por área")
+
+                # Filtro de áreas
+                areas_disponibles = df_ahorro["Area"].unique().tolist()
+                areas_seleccionadas = st.multiselect(
+                    "Filtrar áreas para gráfico de comparación",
+                    areas_disponibles,
+                    default=areas_disponibles
+                )
+
+                df_ahorro_filtrado = df_ahorro[df_ahorro["Area"].isin(areas_seleccionadas)]
+
+                # Crear datos en formato largo para comparación: actual vs modelo
+                data_plot = []
+
+                for _, row in df_ahorro_filtrado.iterrows():
+                    data_plot.append({
+                        "Área": row["Area"],
+                        "Tipo": "Costo actual",
+                        "Costo": row["Costo actual"]
+                    })
+                    data_plot.append({
+                        "Área": row["Area"],
+                        "Tipo": "Costo estimado",
+                        "Costo": row["Costo estimado"]
+                    })
+
+                df_comparacion_areas = pd.DataFrame(data_plot)
+
+                # Gráfico
+                fig_comp = px.bar(
+                    df_comparacion_areas,
+                    x="Área",
+                    y="Costo",
+                    color="Tipo",
+                    barmode="group",
+                    labels={"Costo": "Costo ($)", "Área": "Área"},
+                    title="Comparación de costo actual vs estimado por área",
+                    text_auto=".2s"
+                )
+
+                st.plotly_chart(fig_comp, use_container_width=True)
+
+                import io
+
+                # Crear un Excel en memoria
+                output = io.BytesIO()
+
+                with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+                    df_reduccion_por_area_tipo.to_excel(writer, index=False, sheet_name="Reducción estimada")
+                    df_ahorro.to_excel(writer, index=False, sheet_name="Ahorro estimado")
+
+
+                output.seek(0)
+
+                st.download_button(
+                    label="📥 Descargar resultados en Excel",
+                    data=output,
+                    file_name="estimacion_ahorro_modelos.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
 
 
+                
 
-        except Exception as e:
-            st.error(f"❌ Error al cargar archivo de costos: {e}")
+
+
 
 
 

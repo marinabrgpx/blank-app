@@ -6,3 +6,4 @@ webbrowser
 pyvis
 importlib
 plotly
+xlsxwriter

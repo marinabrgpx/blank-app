@@ -5,25 +5,29 @@ def expandir_tareas(df):
     expanded_rows = []
 
     for idx, row in df.iterrows():
+        nombre_tarea = str(row["Tarea"]).strip()
         turnos = row.get("Turnos", "")
+
         if pd.isna(turnos) or turnos.strip() == "":
-            # No turnos = no expansion
             new_row = row.copy()
-            new_row["Turno_final"] = None
-            new_row["ID"] = f"T{idx}"
+            new_row["Turno_final"] = "Flexible"
+            new_row["ID"] = nombre_tarea
             expanded_rows.append(new_row)
         else:
             turnos_split = [t.strip() for t in str(turnos).split(",")]
             carga_original = row["Carga (h) dia tarea"]
             carga_por_turno = carga_original / len(turnos_split)
+
             for t in turnos_split:
                 new_row = row.copy()
                 turno_label = TURNOS_MAP.get(t, f"Turno {t}")
                 new_row["Turno_final"] = turno_label
                 new_row["Carga (h) dia tarea"] = round(carga_por_turno, 2)
-                new_row["ID"] = f"T{idx}-{t}"
+                new_row["ID"] = f"{nombre_tarea} - {turno_label}"
                 expanded_rows.append(new_row)
+
     return pd.DataFrame(expanded_rows)
+
 
 
 def task_sequencing(df):
